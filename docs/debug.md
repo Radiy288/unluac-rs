@@ -11,19 +11,19 @@
 
 ```bash
 # 直接反编译
-cargo unluac -- -i /path/to/chunk.out -D lua5.1
+cargo unluac -i /path/to/chunk.out -D lua5.1
 
 # 从源码编译后再反编译
-cargo unluac -- -s tests/lua_cases/lua5.1/01_setfenv.lua -D lua5.1
+cargo unluac -s tests/lua_cases/lua5.1/01_setfenv.lua -D lua5.1
 
 # 查看某一层的 dump
-cargo unluac -- -i /path/to/chunk.out -D lua5.4 --dump hir --detail verbose
+cargo unluac -i /path/to/chunk.out -D lua5.4 --dump hir --detail verbose
 
 # 停在某一层并聚焦某个 proto
-cargo unluac -- -i /path/to/chunk.out -D lua5.4 --stop-after readability --proto 3 --proto-depth 1
+cargo unluac -i /path/to/chunk.out -D lua5.4 --stop-after readability --proto 3 --proto-depth 1
 
 # 查看某个 pass 的前后变化
-cargo unluac -- -i /path/to/chunk.out -D lua5.4 --dump-pass temp-inline --proto 2
+cargo unluac -i /path/to/chunk.out -D lua5.4 --dump-pass temp-inline --proto 2
 ```
 
 ## 调试参数速查
