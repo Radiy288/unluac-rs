@@ -55,22 +55,28 @@ impl AstRewritePass for BranchPrettyPass {
     }
 
     fn rewrite_stmt(&mut self, stmt: &mut AstStmt) -> bool {
-        let AstStmt::If(if_stmt) = stmt else {
-            return false;
-        };
-
-        let mut changed = false;
-        if let AstExpr::Unary(unary) = &if_stmt.cond
-            && unary.op == AstUnaryOpKind::Not
-            && let Some(mut else_block) = if_stmt.else_block.take()
-        {
-            let inner = unary.expr.clone();
-            std::mem::swap(&mut if_stmt.then_block, &mut else_block);
-            if_stmt.else_block = Some(else_block);
-            if_stmt.cond = inner;
-            changed = true;
+        match stmt {
+            AstStmt::If(if_stmt) => {
+                let mut changed = false;
+                if let AstExpr::Unary(unary) = &if_stmt.cond
+                    && unary.op == AstUnaryOpKind::Not
+                    && let Some(mut else_block) = if_stmt.else_block.take()
+                {
+                    let inner = unary.expr.clone();
+                    std::mem::swap(&mut if_stmt.then_block, &mut else_block);
+                    if_stmt.else_block = Some(else_block);
+                    if_stmt.cond = inner;
+                    changed = true;
+                }
+                changed || collapse_nested_guard_if(if_stmt)
+            }
+            AstStmt::Repeat(repeat_stmt) => {
+                // `until not (a < b)` → `until a >= b`：复用 if-cond 上的关系反转规则，
+                // 让 `repeat ... until` 也享受到同样的形态归一。
+                normalize_until_negation(&mut repeat_stmt.cond)
+            }
+            _ => false,
         }
-        changed || collapse_nested_guard_if(if_stmt)
     }
 
     fn rewrite_expr(&mut self, expr: &mut AstExpr) -> bool {
@@ -572,6 +578,27 @@ fn negate_guard_condition(expr: AstExpr) -> AstExpr {
             expr: other,
         })),
     }
+}
+
+/// 把 `until not (a < b)` 这种"否定后的关系比较"规范化成 `until a >= b`，
+/// 与 if-cond 的反转规则保持一致。仅在 `cond` 顶层是 `not <relational>` 时生效，
+/// 因此不会改变需要保留 `not` 的非关系语义（例如 `until not flag`）。
+fn normalize_until_negation(cond: &mut AstExpr) -> bool {
+    let AstExpr::Unary(unary) = cond else {
+        return false;
+    };
+    if unary.op != AstUnaryOpKind::Not {
+        return false;
+    }
+    let AstExpr::Binary(binary) = &unary.expr else {
+        return false;
+    };
+    if !matches!(binary.op, AstBinaryOpKind::Lt | AstBinaryOpKind::Le) {
+        return false;
+    }
+    let inner = std::mem::replace(&mut unary.expr, AstExpr::Nil);
+    *cond = negate_guard_condition(inner);
+    true
 }
 
 fn negate_relational_expr(binary: AstBinaryExpr) -> AstExpr {
