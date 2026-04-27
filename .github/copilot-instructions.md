@@ -24,4 +24,4 @@
   - `packages/unluac-js/src/index.ts` js包装库中的类型声明
   - `packages/unluac-cli/src/cli.rs` cli工具中的参数解析部分
   - `packages/unluac-wasm/src/lib.rs` wasm库中的参数解析部分
-  
+- 提交信息应该只使用一行："type(scope): description"，其中 type 是 feat/fix/refactor/test/doc/chore 之一，scope 是修改的模块或者层次，description 是简短的描述。比如 "fix(transformer): handle missing loop body"。不需要描述修改细节，使用中文。

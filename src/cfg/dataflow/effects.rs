@@ -65,7 +65,7 @@ pub(super) fn compute_instr_effect(instr: &LowInstr) -> InstrEffect {
             effect.fixed_must_defs.insert(instr.dst);
         }
         LowInstr::SetUpvalue(instr) => {
-            effect.fixed_uses.insert(instr.src);
+            insert_value_operand_use(&mut effect.fixed_uses, instr.src);
         }
         LowInstr::GetTable(instr) => {
             insert_access_base_use(&mut effect.fixed_uses, instr.base);
@@ -236,7 +236,10 @@ fn insert_value_operand_use(target: &mut BTreeSet<Reg>, operand: ValueOperand) {
         ValueOperand::Reg(reg) => {
             target.insert(reg);
         }
-        ValueOperand::Const(_) | ValueOperand::Integer(_) => {}
+        ValueOperand::Const(_)
+        | ValueOperand::Integer(_)
+        | ValueOperand::Nil
+        | ValueOperand::Boolean(_) => {}
     }
 }
 

@@ -199,11 +199,18 @@ impl ProtoRef {
 }
 
 /// raw bytecode 原本就允许 RK 的位置，在 low-IR 里继续保留寄存器/常量二选一。
+///
+/// `Nil` / `Boolean` 主要服务于 LuaJIT 的立即数 upvalue 写入指令
+/// (`USETP` / 形如 `local x = nil` / `local x = true`)：这些字节码并不会把
+/// 字面量先放入常量池，而是直接通过 KPRI 立即数表达，因此 low-IR 在这里
+/// 显式承载 nil/布尔，避免下游再去合成虚拟寄存器或假常量项。
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum ValueOperand {
     Reg(Reg),
     Const(ConstRef),
     Integer(i64),
+    Nil,
+    Boolean(bool),
 }
 
 /// 统一 low-IR 指令枚举。
@@ -431,10 +438,17 @@ pub struct GetUpvalueInstr {
     pub src: UpvalueRef,
 }
 
+/// 上值写入。
+///
+/// LuaJIT 把"给上值赋值"按 RHS 形态拆成了 `USETV/USETS/USETN/USETP` 四个指令，
+/// 分别对应寄存器 / 字符串常量 / 数值常量 / KPRI 原语；puc-lua 系列则只发寄存器
+/// 形态的 `SETUPVAL`。这里把 `src` 升格为 `ValueOperand`，让 LuaJIT 的常量直写
+/// 形态可以无损落到同一条 low-IR 上，下游统一通过 `expr_for_value_operand`
+/// 还原表达式即可，避免在 lowering 里临时凑寄存器。
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub struct SetUpvalueInstr {
     pub dst: UpvalueRef,
-    pub src: Reg,
+    pub src: ValueOperand,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]

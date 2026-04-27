@@ -503,7 +503,7 @@ pub(super) fn lower_regular_instr(
         ),
         LowInstr::SetUpvalue(set_upvalue) => vec![assign_stmt(
             vec![HirLValue::Upvalue(UpvalueId(set_upvalue.dst.index()))],
-            vec![expr_for_reg_use(
+            vec![expr_for_value_operand(
                 lowering,
                 block,
                 instr_ref,

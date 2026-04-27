@@ -299,7 +299,58 @@ impl<'a> ProtoLowerer<'a> {
                         vec![raw_index],
                         PendingLowInstr::Ready(LowInstr::SetUpvalue(SetUpvalueInstr {
                             dst: self.upvalue_ref(raw_pc, usize::from(a))?,
-                            src: reg_from_u16(d),
+                            src: ValueOperand::Reg(reg_from_u16(d)),
+                        })),
+                    );
+                    raw_index += 1;
+                }
+                LuaJitOpcode::USetS => {
+                    let (a, d) = expect_ad(raw_pc, opcode, operands)?;
+                    self.emit(
+                        Some(raw_index),
+                        vec![raw_index],
+                        PendingLowInstr::Ready(LowInstr::SetUpvalue(SetUpvalueInstr {
+                            dst: self.upvalue_ref(raw_pc, usize::from(a))?,
+                            src: ValueOperand::Const(
+                                self.kgc_string_const_ref(raw_pc, usize::from(d))?,
+                            ),
+                        })),
+                    );
+                    raw_index += 1;
+                }
+                LuaJitOpcode::USetN => {
+                    let (a, d) = expect_ad(raw_pc, opcode, operands)?;
+                    self.emit(
+                        Some(raw_index),
+                        vec![raw_index],
+                        PendingLowInstr::Ready(LowInstr::SetUpvalue(SetUpvalueInstr {
+                            dst: self.upvalue_ref(raw_pc, usize::from(a))?,
+                            src: ValueOperand::Const(
+                                self.knum_const_ref(raw_pc, usize::from(d))?,
+                            ),
+                        })),
+                    );
+                    raw_index += 1;
+                }
+                LuaJitOpcode::USetP => {
+                    let (a, d) = expect_ad(raw_pc, opcode, operands)?;
+                    let src = match d {
+                        BCDUMP_KPRI_NIL => ValueOperand::Nil,
+                        BCDUMP_KPRI_FALSE => ValueOperand::Boolean(false),
+                        BCDUMP_KPRI_TRUE => ValueOperand::Boolean(true),
+                        _ => {
+                            return Err(TransformError::UnsupportedOpcode {
+                                raw_pc,
+                                opcode: opcode.label(),
+                            });
+                        }
+                    };
+                    self.emit(
+                        Some(raw_index),
+                        vec![raw_index],
+                        PendingLowInstr::Ready(LowInstr::SetUpvalue(SetUpvalueInstr {
+                            dst: self.upvalue_ref(raw_pc, usize::from(a))?,
+                            src,
                         })),
                     );
                     raw_index += 1;
@@ -721,7 +772,11 @@ impl<'a> ProtoLowerer<'a> {
                     );
                     raw_index += 2;
                 }
-                LuaJitOpcode::Jmp => {
+                LuaJitOpcode::Jmp | LuaJitOpcode::IsNext => {
+                    // ISNEXT 是 LuaJIT 在 `for k,v in next, t do` 这种"标准 next 迭代器"专门
+                    // 化时替换的初始 JMP，operand 形态与 JMP 完全一致 —— 它告诉 JIT 后面紧跟
+                    // 的 ITERN 已经被验证为标准 next。对反编译而言它就是个普通的前向跳转，按
+                    // JMP 处理即可，不需要单独建模。
                     let (_, d) = expect_ad(raw_pc, opcode, operands)?;
                     self.emit(
                         Some(raw_index),

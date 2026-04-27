@@ -16,6 +16,8 @@ pub(crate) fn expr_for_value_operand(
         ValueOperand::Reg(reg) => expr_for_reg_use(lowering, block, instr_ref, reg),
         ValueOperand::Const(const_ref) => expr_for_const(lowering.proto, const_ref),
         ValueOperand::Integer(value) => HirExpr::Integer(value),
+        ValueOperand::Nil => HirExpr::Nil,
+        ValueOperand::Boolean(value) => HirExpr::Boolean(value),
     }
 }
 
@@ -29,6 +31,8 @@ pub(crate) fn expr_for_value_operand_inline(
         ValueOperand::Reg(reg) => expr_for_reg_use_inline(lowering, block, instr_ref, reg),
         ValueOperand::Const(const_ref) => expr_for_const(lowering.proto, const_ref),
         ValueOperand::Integer(value) => HirExpr::Integer(value),
+        ValueOperand::Nil => HirExpr::Nil,
+        ValueOperand::Boolean(value) => HirExpr::Boolean(value),
     }
 }
 

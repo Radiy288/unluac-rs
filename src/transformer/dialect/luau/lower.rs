@@ -281,7 +281,7 @@ impl<'a> ProtoLowerer<'a> {
                         vec![raw_index],
                         PendingLowInstr::Ready(LowInstr::SetUpvalue(SetUpvalueInstr {
                             dst: self.upvalue_ref(raw_pc, b as usize)?,
-                            src: reg_from_u8(a),
+                            src: ValueOperand::Reg(reg_from_u8(a)),
                         })),
                     );
                     raw_index += 1;
@@ -1013,10 +1013,24 @@ impl<'a> ProtoLowerer<'a> {
                     );
                     raw_index += 1;
                 }
-                _ => {
-                    return Err(TransformError::UnsupportedDialect {
-                        version: crate::parser::DialectVersion::Luau,
-                    });
+                LuauOpcode::JumpX => {
+                    // JUMPX 是 Luau 的 24-bit 扩展 JUMP，operand 形态是 `E`，offset 范围比
+                    // 普通 JUMP 大但语义完全一致；按普通无条件跳转处理即可。
+                    let e = expect_e(raw_pc, opcode, operands)?;
+                    self.clear_all_method_hints();
+                    self.emit(
+                        Some(raw_index),
+                        vec![raw_index],
+                        PendingLowInstr::Jump {
+                            target: TargetPlaceholder::Raw(self.jump_target(raw_pc, e)?),
+                        },
+                    );
+                    raw_index += 1;
+                }
+                LuauOpcode::NativeCall => {
+                    // NATIVECALL 是 Luau 给紧随其后的 CALL 加的"已经被 native code-gen 接管"
+                    // 标记，本身不修改任何寄存器、不改变控制流。反编译时直接跳过即可。
+                    raw_index += 1;
                 }
             }
         }
@@ -1475,6 +1489,9 @@ define_operand_expecters! {
     }
     fn expect_ad("AD") -> (u8, i16) {
         LuauOperands::AD { a, d } => (*a, *d)
+    }
+    fn expect_e("E") -> i32 {
+        LuauOperands::E { e } => *e
     }
 }
 

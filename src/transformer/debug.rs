@@ -278,7 +278,7 @@ pub fn format_low_instr(instr: &LowInstr) -> String {
         LowInstr::SetUpvalue(instr) => format!(
             "set-upvalue {} <- {}",
             format_upvalue(instr.dst),
-            format_reg(instr.src)
+            format_value_operand(instr.src)
         ),
         LowInstr::GetTable(instr) => format!(
             "get-table {} <- {}[{}]",
@@ -405,6 +405,8 @@ fn format_value_operand(operand: ValueOperand) -> String {
         ValueOperand::Reg(reg) => format_reg(reg),
         ValueOperand::Const(const_ref) => format_const(const_ref),
         ValueOperand::Integer(value) => value.to_string(),
+        ValueOperand::Nil => "nil".to_owned(),
+        ValueOperand::Boolean(value) => value.to_string(),
     }
 }
 
