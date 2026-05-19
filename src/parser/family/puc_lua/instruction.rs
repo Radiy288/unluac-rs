@@ -1,10 +1,10 @@
 use crate::parser::error::ParseError;
 use crate::parser::raw::{
-    DialectInstrExtra, Origin, RawInstr, RawInstrOpcode, RawInstrOperands, Span,
+    DialectInstrExtra, Origin, PucLuaChunkLayout, RawInstr, RawInstrOpcode, RawInstrOperands, Span,
 };
 use crate::parser::reader::BinaryReader;
 
-use super::layout::{PucLuaLayout, RawInstructionWord, read_instruction_words};
+use super::layout::{RawInstructionWord, read_instruction_words};
 
 const MAXARG_SBX_18: i32 = ((1 << 18) - 1) >> 1;
 const MAXARG_SBX_17: i32 = ((1 << 17) - 1) >> 1;
@@ -26,6 +26,16 @@ pub(crate) trait PucLuaInstructionCodec {
     fn opcode_label(opcode: Self::Opcode) -> &'static str;
     fn extra_arg_opcode() -> Self::Opcode;
     fn extra_arg_ax(fields: Self::Fields) -> u32;
+    fn read_extra_word(
+        words: &[RawInstructionWord],
+        pc: usize,
+        opcode: Self::Opcode,
+    ) -> Result<u32, ParseError>
+    where
+        Self: Sized,
+    {
+        read_puc_lua_extra_arg_word::<Self>(words, pc, opcode)
+    }
     fn wrap_opcode(opcode: Self::Opcode) -> RawInstrOpcode;
     fn wrap_operands(operands: Self::Operands) -> RawInstrOperands;
     fn wrap_extra(pc: u32, word_len: u8, extra_arg: Option<u32>) -> DialectInstrExtra;
@@ -53,7 +63,7 @@ where
             let policy = C::extra_word_policy(opcode);
             if C::should_read_extra_word(policy, fields) {
                 word_len = 2;
-                Some(read_puc_lua_extra_arg_word::<C>(words, pc, opcode)?)
+                Some(C::read_extra_word(words, pc, opcode)?)
             } else {
                 None
             }
@@ -82,7 +92,7 @@ where
 /// 共享的“读取 instruction section 并解码成 `RawInstr`”骨架。
 pub(crate) fn parse_puc_lua_instruction_section<C, ReadCount, Prepare>(
     reader: &mut BinaryReader<'_>,
-    layout: &PucLuaLayout,
+    layout: &PucLuaChunkLayout,
     mut read_count: ReadCount,
     mut prepare: Prepare,
     size_field: &'static str,
@@ -90,7 +100,7 @@ pub(crate) fn parse_puc_lua_instruction_section<C, ReadCount, Prepare>(
 where
     C: PucLuaInstructionCodec,
     ReadCount: FnMut(&mut BinaryReader<'_>, &'static str) -> Result<u32, ParseError>,
-    Prepare: FnMut(&mut BinaryReader<'_>, &PucLuaLayout) -> Result<(), ParseError>,
+    Prepare: FnMut(&mut BinaryReader<'_>, &PucLuaChunkLayout) -> Result<(), ParseError>,
 {
     let count = read_count(reader, "instruction count")?;
     prepare(reader, layout)?;

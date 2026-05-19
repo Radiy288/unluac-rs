@@ -212,7 +212,8 @@ fn build_branch_short_circuit_plan_from_candidate(
         return None;
     }
 
-    let has_forbidden = decision_references_forbidden_candidate_temps(lowering, short, &decision, &allowed_blocks);
+    let has_forbidden =
+        decision_references_forbidden_candidate_temps(lowering, short, &decision, &allowed_blocks);
     let decision = if has_forbidden {
         match short.exit {
             ShortCircuitExit::BranchExit { .. } => {

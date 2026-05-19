@@ -70,7 +70,7 @@ macro_rules! define_puc_lua_instruction_codec {
     ) => {
         struct $codec;
 
-        impl $crate::parser::dialect::puc_lua::PucLuaInstructionCodec for $codec {
+        impl $crate::parser::family::puc_lua::PucLuaInstructionCodec for $codec {
             type Opcode = $opcode;
             type Fields = $fields;
             type ExtraWordPolicy = $extra_word_policy;

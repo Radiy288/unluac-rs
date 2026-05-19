@@ -10,7 +10,7 @@ use crate::decompile::DecompileDialect;
 use crate::parser::error::ParseError;
 use crate::parser::options::ParseOptions;
 use crate::parser::raw::{
-    ChunkHeader, ChunkLayout, DecodedText, Dialect, DialectConstPoolExtra, DialectDebugExtra,
+    ChunkHeader, ChunkLayout, Dialect, DialectConstPoolExtra, DialectDebugExtra,
     DialectHeaderExtra, DialectInstrExtra, DialectProtoExtra, DialectUpvalueExtra,
     LuaJitChunkLayout, Origin, ProtoFrameInfo, ProtoLineRange, ProtoSignature, RawChunk,
     RawConstPool, RawConstPoolCommon, RawDebugInfo, RawDebugInfoCommon, RawInstr, RawInstrOpcode,
@@ -18,6 +18,7 @@ use crate::parser::raw::{
     RawUpvalueInfo, RawUpvalueInfoCommon, Span,
 };
 use crate::parser::reader::BinaryReader;
+use crate::parser::strings::build_raw_string;
 
 use super::raw::{
     LuaJitConstPoolExtra, LuaJitDebugExtra, LuaJitHeaderExtra, LuaJitInstrExtra, LuaJitKgcEntry,
@@ -81,7 +82,7 @@ impl LuaJitParser {
             DialectHeaderExtra::LuaJit(extra) => extra.chunk_name.clone(),
             _ => None,
         };
-        let layout = *header
+        let layout = header
             .luajit_layout()
             .expect("luajit parser must produce a luajit chunk layout");
 
@@ -200,7 +201,7 @@ impl LuaJitParser {
         &self,
         bytes: &[u8],
         base_offset: usize,
-        layout: LuaJitChunkLayout,
+        layout: &LuaJitChunkLayout,
         chunk_name: Option<&RawString>,
         proto_stack: &mut Vec<RawProto>,
     ) -> Result<RawProto, ParseError> {
@@ -668,37 +669,7 @@ impl LuaJitParser {
         size: usize,
         bytes: Vec<u8>,
     ) -> Result<RawString, ParseError> {
-        let text = self.decode_string_text(offset, &bytes)?;
-        Ok(RawString {
-            bytes,
-            text,
-            origin: Origin {
-                span: Span { offset, size },
-                raw_word: None,
-            },
-        })
-    }
-
-    fn decode_string_text(
-        &self,
-        offset: usize,
-        bytes: &[u8],
-    ) -> Result<Option<DecodedText>, ParseError> {
-        if bytes.is_empty() {
-            return Ok(Some(DecodedText {
-                encoding: self.options.string_encoding,
-                value: String::new(),
-            }));
-        }
-
-        Ok(Some(DecodedText {
-            encoding: self.options.string_encoding,
-            value: self.options.string_encoding.decode(
-                offset,
-                bytes,
-                self.options.string_decode_mode,
-            )?,
-        }))
+        build_raw_string(self.options, offset, bytes, size)
     }
 
     fn read_u64_from_uleb(&self, reader: &mut BinaryReader<'_>) -> Result<u64, ParseError> {

@@ -3,7 +3,7 @@
 //! 它们不放进 parser 公共层，是因为这些结构天然和 Lua 5.1 VM 指令集
 //! 绑定，后续支持 Lua 5.2、LuaJIT、Luau 时不会共享这套定义。
 
-use crate::parser::dialect::puc_lua::{DecodedInstructionFields, define_puc_lua_opcodes};
+use crate::parser::family::puc_lua::{DecodedInstructionFields, define_puc_lua_opcodes};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum Lua51OperandKind {
@@ -129,27 +129,11 @@ pub enum Lua51InstructionMode {
     AsBx,
 }
 
-/// Lua 5.1 header 目前没有额外字段，但保留空结构可以让接口保持稳定。
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Lua51HeaderExtra;
-
 /// Lua 5.1 需要保留原始 vararg 位图，因为它不等同于简单布尔值。
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct Lua51ProtoExtra {
     pub raw_is_vararg: u8,
 }
-
-/// Lua 5.1 常量池目前没有共享层之外的额外类别。
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Lua51ConstPoolExtra;
-
-/// Lua 5.1 chunk 不显式存 upvalue 描述符，但仍保留扩展槽位。
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Lua51UpvalueExtra;
-
-/// Lua 5.1 调试信息目前完全落在共享结构里，但保留扩展槽位。
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Lua51DebugExtra;
 
 /// Lua 5.1 指令额外保存 raw pc 和 `SETLIST` 的扩展参数。
 ///

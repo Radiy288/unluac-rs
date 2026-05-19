@@ -26,7 +26,7 @@ Generate ←── Naming ←── Readability ←── AST ←── HIR ←�
 | # | 层 | 文档 | 关键入口函数 |
 | --- | --- | --- | --- |
 | 0 | 总览 | [0.introduce.md](./design/0.introduce.md) | — |
-| 1 | Parser | [1.parser.md](./design/1.parser.md) | `parse_chunk` / `parse_chunk_with_dialect` |
+| 1 | Parser | [1.parser.md](./design/1.parser.md) | `parse_input(state, context)` / `parse_chunk_with_dialect` |
 | 2 | Transformer | [2.transformer.md](./design/2.transformer.md) | `lower_chunk(state, context)` |
 | 3 | CFG / GraphFacts / Dataflow | [3.cfg-dataflow.md](./design/3.cfg-dataflow.md) | `build_cfg_proto(state, context)` / `analyze_graph_facts(state, context)` / `analyze_dataflow(state, context)` |
 | 4 | StructureFacts | [4.structure.md](./design/4.structure.md) | `analyze_structure` |

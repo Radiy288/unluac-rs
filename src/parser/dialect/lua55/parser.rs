@@ -6,17 +6,17 @@
 //! 显式实现，避免把这些变化继续塞回 5.4 的读取假设里。
 
 use crate::decompile::DecompileDialect;
-use crate::parser::dialect::puc_lua::{
+use crate::parser::error::ParseError;
+use crate::parser::family::puc_lua::{
     AbsDebugDriver, AbsLineInfoConfig, LUA55_LUAC_DATA, LUA55_LUAC_INST, LUA55_LUAC_INT,
-    LUA55_LUAC_NUM, PucLuaLayout, PucLuaProtoSections, build_raw_string, count_u8,
+    LUA55_LUAC_NUM, PucLuaProtoSections, build_raw_string, collect_counted, count_u8,
     decode_instruction_word_55, define_puc_lua_instruction_codec, finish_puc_lua_proto,
-    inherit_source, parse_abs_debug_sections, parse_child_protos, parse_luac_data_header_prelude,
+    inherit_source, parse_abs_debug_sections, parse_luac_data_header_prelude,
     parse_puc_lua_instruction_section, parse_tagged_literal_pool, parse_upvalues_with_kinds,
     read_f64_sentinel, read_i64_sentinel, read_i64_sentinel_endianness, read_proto_prelude,
     require_present, validate_instruction_word_size, validate_main_proto_upvalue_count,
     validate_optional_count_match,
 };
-use crate::parser::error::ParseError;
 use crate::parser::options::ParseOptions;
 use crate::parser::raw::{
     ChunkHeader, ChunkLayout, Dialect, DialectConstPoolExtra, DialectDebugExtra,
@@ -28,8 +28,8 @@ use crate::parser::raw::{
 use crate::parser::reader::BinaryReader;
 
 use super::raw::{
-    Lua55AbsLineInfo, Lua55ConstPoolExtra, Lua55DebugExtra, Lua55ExtraWordPolicy, Lua55HeaderExtra,
-    Lua55InstrExtra, Lua55Opcode, Lua55ProtoExtra, Lua55UpvalueExtra,
+    Lua55AbsLineInfo, Lua55DebugExtra, Lua55ExtraWordPolicy, Lua55InstrExtra, Lua55Opcode,
+    Lua55ProtoExtra, Lua55UpvalueExtra,
 };
 
 const LUA55_VERSION: u8 = 0x55;
@@ -57,7 +57,7 @@ struct Lua55ParserState {
 
 struct Lua55AbsDebugDriver<'a> {
     parser: &'a mut Lua55ParserState,
-    layout: &'a PucLuaLayout,
+    layout: &'a PucLuaChunkLayout,
     permissive: bool,
     upvalue_count: u8,
 }
@@ -102,10 +102,7 @@ impl<'a, 'bytes> AbsDebugDriver<'bytes> for Lua55AbsDebugDriver<'a> {
         reader: &mut BinaryReader<'bytes>,
     ) -> Result<RawLocalVar, ParseError> {
         Ok(RawLocalVar {
-            name: require_present(
-                self.parser.parse_optional_string(reader)?,
-                "local var name length",
-            )?,
+            name: require_present(self.parser.parse_string(reader)?, "local var name length")?,
             start_pc: reader.read_varint_u32_lua55("local var startpc")?,
             end_pc: reader.read_varint_u32_lua55("local var endpc")?,
         })
@@ -124,7 +121,7 @@ impl<'a, 'bytes> AbsDebugDriver<'bytes> for Lua55AbsDebugDriver<'a> {
         &mut self,
         reader: &mut BinaryReader<'bytes>,
     ) -> Result<Option<RawString>, ParseError> {
-        self.parser.parse_optional_string(reader)
+        self.parser.parse_string(reader)
     }
 }
 
@@ -146,20 +143,11 @@ impl Lua55ParserState {
     fn parse(&mut self, bytes: &[u8]) -> Result<RawChunk, ParseError> {
         let mut reader = BinaryReader::new(bytes);
         let header = self.parse_header(&mut reader)?;
-        let header_layout = header
+        let layout = header
             .puc_lua_layout()
             .expect("lua55 parser must produce a PUC-Lua header layout");
-        let layout = PucLuaLayout {
-            endianness: header_layout.endianness,
-            integer_size: header_layout.integer_size,
-            lua_integer_size: header_layout.lua_integer_size,
-            size_t_size: 0,
-            instruction_size: header_layout.instruction_size,
-            number_size: header_layout.number_size,
-            integral_number: false,
-        };
         let main_upvalue_count = reader.read_u8()?;
-        let main = self.parse_proto(&mut reader, &layout, None)?;
+        let main = self.parse_proto(&mut reader, layout, None)?;
 
         validate_main_proto_upvalue_count(
             self.options.mode.is_permissive(),
@@ -246,7 +234,7 @@ impl Lua55ParserState {
                 number_size,
                 integral_number: false,
             }),
-            extra: DialectHeaderExtra::Lua55(Lua55HeaderExtra),
+            extra: DialectHeaderExtra::Lua55,
             origin: Origin {
                 span: Span {
                     offset: start,
@@ -260,7 +248,7 @@ impl Lua55ParserState {
     fn parse_proto(
         &mut self,
         reader: &mut BinaryReader<'_>,
-        layout: &PucLuaLayout,
+        layout: &PucLuaChunkLayout,
         parent_source: Option<&RawString>,
     ) -> Result<RawProto, ParseError> {
         let (prelude, header_source) = read_proto_prelude(
@@ -282,13 +270,10 @@ impl Lua55ParserState {
         let constants = self.parse_constants(reader, layout)?;
         let upvalues = self.parse_upvalues(reader)?;
         let child_count = reader.read_varint_u32_lua55("child proto count")?;
-        let children = parse_child_protos(child_count, || {
+        let children = collect_counted(child_count, || {
             self.parse_proto(reader, layout, parent_source)
         })?;
-        let source = inherit_source(
-            self.parse_optional_string(reader)?.or(header_source),
-            parent_source,
-        );
+        let source = inherit_source(self.parse_string(reader)?.or(header_source), parent_source);
         let debug_info = self.parse_debug_info(
             reader,
             layout,
@@ -321,7 +306,7 @@ impl Lua55ParserState {
     fn parse_constants(
         &mut self,
         reader: &mut BinaryReader<'_>,
-        layout: &PucLuaLayout,
+        layout: &PucLuaChunkLayout,
     ) -> Result<RawConstPool, ParseError> {
         let literals = parse_tagged_literal_pool(
             reader,
@@ -349,7 +334,7 @@ impl Lua55ParserState {
 
         Ok(RawConstPool {
             common: RawConstPoolCommon { literals },
-            extra: DialectConstPoolExtra::Lua55(Lua55ConstPoolExtra),
+            extra: DialectConstPoolExtra::Lua55,
         })
     }
 
@@ -373,7 +358,7 @@ impl Lua55ParserState {
     fn parse_debug_info(
         &mut self,
         reader: &mut BinaryReader<'_>,
-        layout: &PucLuaLayout,
+        layout: &PucLuaChunkLayout,
         raw_instruction_words: usize,
         defined_start: u32,
         upvalue_count: u8,
@@ -408,13 +393,6 @@ impl Lua55ParserState {
                 abs_line_info,
             }),
         })
-    }
-
-    fn parse_optional_string(
-        &mut self,
-        reader: &mut BinaryReader<'_>,
-    ) -> Result<Option<RawString>, ParseError> {
-        self.parse_string(reader)
     }
 
     fn parse_string(
@@ -503,7 +481,7 @@ impl Lua55ParserState {
 define_puc_lua_instruction_codec!(
     codec: Lua55InstructionCodec,
     opcode: Lua55Opcode,
-    fields: crate::parser::dialect::puc_lua::DecodedInstructionFields55,
+    fields: crate::parser::family::puc_lua::DecodedInstructionFields55,
     extra_word_policy: Lua55ExtraWordPolicy,
     operands: super::raw::Lua55Operands,
     decode_fields: decode_instruction_word_55,

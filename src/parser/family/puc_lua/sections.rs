@@ -1,6 +1,6 @@
 use crate::parser::error::ParseError;
 use crate::parser::raw::{
-    RawDebugInfoCommon, RawLiteralConst, RawLocalVar, RawProto, RawString, RawUpvalueDescriptor,
+    RawDebugInfoCommon, RawLiteralConst, RawLocalVar, RawString, RawUpvalueDescriptor,
 };
 use crate::parser::reader::BinaryReader;
 
@@ -90,14 +90,6 @@ pub(crate) fn parse_upvalues_with_kinds(
     Ok(pairs.into_iter().unzip())
 }
 
-/// 统一读取 local var 列表。
-pub(crate) fn parse_local_vars(
-    count: u32,
-    parse_local_var: impl FnMut() -> Result<RawLocalVar, ParseError>,
-) -> Result<Vec<RawLocalVar>, ParseError> {
-    collect_counted(count, parse_local_var)
-}
-
 /// 统一读取可选的 upvalue 名字并丢弃 `None`。
 pub(crate) fn parse_upvalue_names(
     count: u32,
@@ -151,7 +143,7 @@ pub(crate) fn parse_classic_debug_sections<'a>(
     validate_line_info_length(permissive, line_info.len(), raw_instruction_words)?;
 
     let local_count = driver.read_count(reader, "local var count")?;
-    let local_vars = parse_local_vars(local_count, || driver.parse_local_var(reader))?;
+    let local_vars = collect_counted(local_count, || driver.parse_local_var(reader))?;
 
     let upvalue_name_count = driver.read_count(reader, "upvalue name count")?;
     driver.validate_upvalue_count(upvalue_name_count)?;
@@ -254,7 +246,7 @@ pub(crate) fn parse_abs_debug_sections<'a>(
     )?;
 
     let local_count = driver.read_count(reader, "local var count")?;
-    let local_vars = parse_local_vars(local_count, || driver.parse_local_var(reader))?;
+    let local_vars = collect_counted(local_count, || driver.parse_local_var(reader))?;
 
     let upvalue_name_count = driver.read_count(reader, "upvalue name count")?;
     driver.validate_upvalue_count(upvalue_name_count)?;
@@ -270,14 +262,6 @@ pub(crate) fn parse_abs_debug_sections<'a>(
         line_deltas,
         abs_line_pairs,
     })
-}
-
-/// 统一读取 child proto 列表。
-pub(crate) fn parse_child_protos(
-    count: u32,
-    parse_child: impl FnMut() -> Result<RawProto, ParseError>,
-) -> Result<Vec<RawProto>, ParseError> {
-    collect_counted(count, parse_child)
 }
 
 /// 把 Lua 5.4/5.5 的 `lineinfo + abslineinfo` 组合恢复成逐 PC 的源码行号。

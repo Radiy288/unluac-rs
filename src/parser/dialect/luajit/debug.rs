@@ -3,11 +3,13 @@
 use std::fmt::Write as _;
 
 use crate::debug::{
-    DebugColorMode, DebugDetail, DebugFilters, build_proto_nodes, colorize_debug_text,
-    compute_focus_plan, format_breadcrumb, format_proto_summary_row,
+    DebugColorMode, DebugDetail, DebugFilters, colorize_debug_text, format_breadcrumb,
 };
-use crate::parser::debug::{ParserProtoEntry, build_parser_summary_row};
-use crate::parser::raw::{DecodedText, RawChunk, RawInstr, RawLiteralConst, RawProto, RawString};
+use crate::parser::debug::{
+    collect_parser_proto_entries, format_literal, format_optional_source, plan_parser_focus,
+    write_elided_summary,
+};
+use crate::parser::raw::{RawChunk, RawInstr};
 
 use super::raw::{
     LuaJitConstPoolExtra, LuaJitDebugExtra, LuaJitHeaderExtra, LuaJitKgcEntry,
@@ -22,12 +24,8 @@ pub(crate) fn dump_chunk(
     color: DebugColorMode,
 ) -> String {
     let mut output = String::new();
-    let mut protos = Vec::new();
-    collect_protos(&chunk.main, None, 0, &mut protos);
-
-    let parents: Vec<Option<usize>> = protos.iter().map(|(_, parent, _, _)| *parent).collect();
-    let nodes = build_proto_nodes(&parents);
-    let plan = compute_focus_plan(&nodes, &filters.as_focus_request());
+    let protos = collect_parser_proto_entries(&chunk.main);
+    let plan = plan_parser_focus(&protos, filters);
 
     let layout = chunk
         .header
@@ -77,27 +75,19 @@ pub(crate) fn dump_chunk(
         return colorize_debug_text(&output, color);
     }
 
-    for (id, parent, depth, proto) in protos {
-        if plan.is_elided(id) {
-            let indent = "  ".repeat(depth);
-            let entry = ParserProtoEntry {
-                id,
-                parent,
-                depth,
-                proto,
-            };
-            let _ = writeln!(
-                output,
-                "{indent}{}",
-                format_proto_summary_row(&build_parser_summary_row(&entry)),
-            );
+    for entry in protos {
+        if plan.is_elided(entry.id) {
+            let indent = "  ".repeat(entry.depth);
+            write_elided_summary(&mut output, &indent, &entry);
             continue;
         }
-        if !plan.is_visible(id) {
+        if !plan.is_visible(entry.id) {
             continue;
         }
 
-        let indent = "  ".repeat(depth);
+        let indent = "  ".repeat(entry.depth);
+        let id = entry.id;
+        let proto = entry.proto;
         let LuaJitProtoExtra {
             flags,
             first_line,
@@ -195,19 +185,6 @@ pub(crate) fn dump_chunk(
     colorize_debug_text(&output, color)
 }
 
-fn collect_protos<'a>(
-    proto: &'a RawProto,
-    parent: Option<usize>,
-    depth: usize,
-    out: &mut Vec<(usize, Option<usize>, usize, &'a RawProto)>,
-) {
-    let id = out.len();
-    out.push((id, parent, depth, proto));
-    for child in &proto.common.children {
-        collect_protos(child, Some(id), depth + 1, out);
-    }
-}
-
 fn format_instr(raw: &RawInstr) -> String {
     let opcode = raw
         .opcode
@@ -234,31 +211,6 @@ fn format_operands(operands: &LuaJitOperands) -> String {
         LuaJitOperands::A { a } => format!("A={a}"),
         LuaJitOperands::AD { a, d } => format!("A={a} D={d}"),
         LuaJitOperands::ABC { a, b, c } => format!("A={a} B={b} C={c}"),
-    }
-}
-
-fn format_optional_source(source: Option<&RawString>) -> String {
-    source.map_or_else(|| "-".to_owned(), format_raw_string)
-}
-
-fn format_raw_string(source: &RawString) -> String {
-    source
-        .text
-        .as_ref()
-        .map(|DecodedText { value, .. }| format!("{value:?}"))
-        .unwrap_or_else(|| format!("<{} bytes>", source.bytes.len()))
-}
-
-fn format_literal(literal: &RawLiteralConst) -> String {
-    match literal {
-        RawLiteralConst::Nil => "nil".to_owned(),
-        RawLiteralConst::Boolean(value) => format!("bool({value})"),
-        RawLiteralConst::Integer(value) => format!("int({value})"),
-        RawLiteralConst::Number(value) => format!("num({value})"),
-        RawLiteralConst::String(value) => format!("str({})", format_raw_string(value)),
-        RawLiteralConst::Int64(value) => format!("i64({value})"),
-        RawLiteralConst::UInt64(value) => format!("u64({value})"),
-        RawLiteralConst::Complex { real, imag } => format!("complex({real},{imag})"),
     }
 }
 

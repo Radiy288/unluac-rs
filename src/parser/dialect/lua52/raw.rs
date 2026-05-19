@@ -4,7 +4,7 @@
 //! `GETTABUP` / `SETTABUP`、`TFORCALL` / `TFORLOOP` 的编码形状，都不应该污染
 //! parser 公共层。
 
-use crate::parser::dialect::puc_lua::{DecodedInstructionFields, define_puc_lua_opcodes};
+use crate::parser::family::puc_lua::{DecodedInstructionFields, define_puc_lua_opcodes};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum Lua52OperandKind {
@@ -114,27 +114,11 @@ impl Lua52Opcode {
     }
 }
 
-/// Lua 5.2 header 额外规则目前只体现在 `LUAC_TAIL` 校验上，这里保留空结构以稳定接口。
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Lua52HeaderExtra;
-
 /// Lua 5.2 仍保留原始 vararg 位图，避免更后层丢掉版本特异信息。
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct Lua52ProtoExtra {
     pub raw_is_vararg: u8,
 }
-
-/// Lua 5.2 常量池目前没有共享层之外的额外类别。
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Lua52ConstPoolExtra;
-
-/// Lua 5.2 upvalue 描述符已经落进共享层，这里保留扩展槽位。
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Lua52UpvalueExtra;
-
-/// Lua 5.2 调试信息目前完全落在共享结构里，但保留扩展槽位。
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Lua52DebugExtra;
 
 /// Lua 5.2 指令额外保存 raw pc 以及 `LOADKX/SETLIST` 绑定的 `EXTRAARG`。
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]

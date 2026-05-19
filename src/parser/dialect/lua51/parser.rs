@@ -4,22 +4,25 @@
 //! 保真，而不是在更后面的层次再去猜原始结构。
 
 use crate::decompile::DecompileDialect;
-use crate::parser::dialect::puc_lua::{LUA_SIGNATURE, decode_instruction_word};
 use crate::parser::error::ParseError;
+use crate::parser::family::puc_lua::{
+    DecodedInstructionFields, LUA_SIGNATURE, PucLuaInstructionCodec, RawInstructionWord,
+    build_raw_string, decode_instruction_word, parse_puc_lua_instruction_section, read_sized_i64,
+    read_sized_u32,
+};
 use crate::parser::options::ParseOptions;
 use crate::parser::raw::{
-    ChunkHeader, ChunkLayout, DecodedText, Dialect, DialectConstPoolExtra, DialectDebugExtra,
+    ChunkHeader, ChunkLayout, Dialect, DialectConstPoolExtra, DialectDebugExtra,
     DialectHeaderExtra, DialectInstrExtra, DialectProtoExtra, DialectUpvalueExtra, Endianness,
     Origin, ProtoFrameInfo, ProtoLineRange, ProtoSignature, PucLuaChunkLayout, RawChunk,
-    RawConstPool, RawConstPoolCommon, RawDebugInfo, RawDebugInfoCommon, RawInstr, RawInstrOpcode,
+    RawConstPool, RawConstPoolCommon, RawDebugInfo, RawDebugInfoCommon, RawInstrOpcode,
     RawInstrOperands, RawLiteralConst, RawLocalVar, RawProto, RawProtoCommon, RawString,
     RawUpvalueInfo, RawUpvalueInfoCommon, Span,
 };
 use crate::parser::reader::BinaryReader;
 
 use super::raw::{
-    Lua51ConstPoolExtra, Lua51DebugExtra, Lua51ExtraWordPolicy, Lua51HeaderExtra, Lua51InstrExtra,
-    Lua51Opcode, Lua51ProtoExtra, Lua51UpvalueExtra,
+    Lua51ExtraWordPolicy, Lua51InstrExtra, Lua51Opcode, Lua51Operands, Lua51ProtoExtra,
 };
 
 const LUA51_VERSION: u8 = 0x51;
@@ -34,22 +37,6 @@ pub(crate) struct Lua51Parser {
     options: ParseOptions,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct Lua51Layout {
-    endianness: Endianness,
-    integer_size: u8,
-    size_t_size: u8,
-    instruction_size: u8,
-    number_size: u8,
-    integral_number: bool,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct RawInstructionWord {
-    offset: usize,
-    word: u32,
-}
-
 impl Lua51Parser {
     pub(crate) const fn new(options: ParseOptions) -> Self {
         Self { options }
@@ -61,15 +48,7 @@ impl Lua51Parser {
         let layout = header
             .puc_lua_layout()
             .expect("lua51 parser must produce a PUC-Lua header layout");
-        let layout = Lua51Layout {
-            endianness: layout.endianness,
-            integer_size: layout.integer_size,
-            size_t_size: layout.size_t_size,
-            instruction_size: layout.instruction_size,
-            number_size: layout.number_size,
-            integral_number: layout.integral_number,
-        };
-        let main = self.parse_proto(&mut reader, &layout, None)?;
+        let main = self.parse_proto(&mut reader, layout, None)?;
 
         Ok(RawChunk {
             header,
@@ -140,7 +119,7 @@ impl Lua51Parser {
                 number_size,
                 integral_number,
             }),
-            extra: DialectHeaderExtra::Lua51(Lua51HeaderExtra),
+            extra: DialectHeaderExtra::Lua51,
             origin: Origin {
                 span: Span {
                     offset: start,
@@ -154,25 +133,31 @@ impl Lua51Parser {
     fn parse_proto(
         &self,
         reader: &mut BinaryReader<'_>,
-        layout: &Lua51Layout,
+        layout: &PucLuaChunkLayout,
         parent_source: Option<&RawString>,
     ) -> Result<RawProto, ParseError> {
         let start = reader.offset();
         let source = self
-            .parse_optional_string(reader, layout)?
+            .parse_string(reader, layout)?
             .or_else(|| parent_source.cloned());
-        let defined_start = self.read_u32(reader, layout, "linedefined")?;
-        let defined_end = self.read_u32(reader, layout, "lastlinedefined")?;
+        let defined_start = read_sized_u32(reader, layout, "linedefined")?;
+        let defined_end = read_sized_u32(reader, layout, "lastlinedefined")?;
         let upvalue_count = reader.read_u8()?;
         let num_params = reader.read_u8()?;
         let raw_is_vararg = reader.read_u8()?;
         let max_stack_size = reader.read_u8()?;
 
-        let instruction_words = self.parse_instruction_words(reader, layout)?;
-        let instructions = self.decode_instructions(&instruction_words)?;
+        let (raw_instruction_words, instructions) =
+            parse_puc_lua_instruction_section::<Lua51InstructionCodec, _, _>(
+                reader,
+                layout,
+                |reader, field| read_sized_u32(reader, layout, field),
+                |_, _| Ok(()),
+                "instruction_size",
+            )?;
         let constants = self.parse_constants(reader, layout)?;
         let children = self.parse_children(reader, layout, source.as_ref())?;
-        let debug_info = self.parse_debug_info(reader, layout, instruction_words.len())?;
+        let debug_info = self.parse_debug_info(reader, layout, raw_instruction_words)?;
 
         Ok(RawProto {
             common: RawProtoCommon {
@@ -195,7 +180,7 @@ impl Lua51Parser {
                         count: upvalue_count,
                         descriptors: Vec::new(),
                     },
-                    extra: DialectUpvalueExtra::Lua51(Lua51UpvalueExtra),
+                    extra: DialectUpvalueExtra::Lua51,
                 },
                 debug_info,
                 children,
@@ -211,88 +196,12 @@ impl Lua51Parser {
         })
     }
 
-    fn parse_instruction_words(
-        &self,
-        reader: &mut BinaryReader<'_>,
-        layout: &Lua51Layout,
-    ) -> Result<Vec<RawInstructionWord>, ParseError> {
-        let count = self.read_count(reader, layout, "instruction count")?;
-        let mut words = Vec::with_capacity(count as usize);
-
-        for _ in 0..count {
-            let offset = reader.offset();
-            let word = reader.read_u64_sized(
-                layout.instruction_size,
-                layout.endianness,
-                "instruction_size",
-            )?;
-            let word = u32::try_from(word).map_err(|_| ParseError::UnsupportedValue {
-                field: "instruction word",
-                value: word,
-            })?;
-            words.push(RawInstructionWord { offset, word });
-        }
-
-        Ok(words)
-    }
-
-    fn decode_instructions(
-        &self,
-        words: &[RawInstructionWord],
-    ) -> Result<Vec<RawInstr>, ParseError> {
-        let mut instructions = Vec::with_capacity(words.len());
-        let mut pc = 0_usize;
-
-        while pc < words.len() {
-            let entry = words[pc];
-            let fields = decode_instruction_word(entry.word);
-            let opcode = Lua51Opcode::try_from(fields.opcode)
-                .map_err(|opcode| ParseError::InvalidOpcode { pc, opcode })?;
-
-            let mut word_len = 1_u8;
-            let setlist_extra_arg = match opcode.extra_word_policy() {
-                Lua51ExtraWordPolicy::None => None,
-                Lua51ExtraWordPolicy::SetListWordIfCZero if fields.c == 0 => {
-                    let Some(extra_word) = words.get(pc + 1).copied() else {
-                        return Err(ParseError::MissingSetListWord { pc });
-                    };
-                    word_len = 2;
-                    Some(extra_word.word)
-                }
-                Lua51ExtraWordPolicy::SetListWordIfCZero => None,
-            };
-            let operands = opcode.decode_operands(fields);
-
-            let span_size = usize::from(word_len) * 4;
-            instructions.push(RawInstr {
-                opcode: RawInstrOpcode::Lua51(opcode),
-                operands: RawInstrOperands::Lua51(operands),
-                extra: DialectInstrExtra::Lua51(Lua51InstrExtra {
-                    pc: pc as u32,
-                    word_len,
-                    setlist_extra_arg,
-                }),
-                origin: Origin {
-                    span: Span {
-                        offset: entry.offset,
-                        size: span_size,
-                    },
-                    raw_word: Some(u64::from(entry.word)),
-                },
-            });
-
-            pc += usize::from(word_len);
-        }
-
-        Ok(instructions)
-    }
-
     fn parse_constants(
         &self,
         reader: &mut BinaryReader<'_>,
-        layout: &Lua51Layout,
+        layout: &PucLuaChunkLayout,
     ) -> Result<RawConstPool, ParseError> {
-        let constant_count = self.read_count(reader, layout, "constant count")?;
+        let constant_count = read_sized_u32(reader, layout, "constant count")?;
         let mut literals = Vec::with_capacity(constant_count as usize);
 
         for _ in 0..constant_count {
@@ -303,7 +212,7 @@ impl Lua51Parser {
                 LUA_TBOOLEAN => RawLiteralConst::Boolean(reader.read_u8()? != 0),
                 LUA_TNUMBER => {
                     if layout.integral_number {
-                        RawLiteralConst::Integer(self.read_i64(reader, layout, "lua_Number")?)
+                        RawLiteralConst::Integer(read_sized_i64(reader, layout, "lua_Number")?)
                     } else {
                         RawLiteralConst::Number(
                             reader.read_f64_sized(layout.number_size, layout.endianness)?,
@@ -326,17 +235,17 @@ impl Lua51Parser {
 
         Ok(RawConstPool {
             common: RawConstPoolCommon { literals },
-            extra: DialectConstPoolExtra::Lua51(Lua51ConstPoolExtra),
+            extra: DialectConstPoolExtra::Lua51,
         })
     }
 
     fn parse_children(
         &self,
         reader: &mut BinaryReader<'_>,
-        layout: &Lua51Layout,
+        layout: &PucLuaChunkLayout,
         parent_source: Option<&RawString>,
     ) -> Result<Vec<RawProto>, ParseError> {
-        let child_count = self.read_count(reader, layout, "child proto count")?;
+        let child_count = read_sized_u32(reader, layout, "child proto count")?;
         let mut children = Vec::with_capacity(child_count as usize);
 
         for _ in 0..child_count {
@@ -349,17 +258,17 @@ impl Lua51Parser {
     fn parse_debug_info(
         &self,
         reader: &mut BinaryReader<'_>,
-        layout: &Lua51Layout,
+        layout: &PucLuaChunkLayout,
         raw_instruction_words: usize,
     ) -> Result<RawDebugInfo, ParseError> {
-        let line_count = self.read_count(reader, layout, "line info count")?;
+        let line_count = read_sized_u32(reader, layout, "line info count")?;
         let mut line_info = Vec::with_capacity(line_count as usize);
 
         for _ in 0..line_count {
-            line_info.push(self.read_u32(reader, layout, "line info")?);
+            line_info.push(read_sized_u32(reader, layout, "line info")?);
         }
 
-        let local_count = self.read_count(reader, layout, "local var count")?;
+        let local_count = read_sized_u32(reader, layout, "local var count")?;
         let mut local_vars = Vec::with_capacity(local_count as usize);
         for _ in 0..local_count {
             let name = self
@@ -368,8 +277,8 @@ impl Lua51Parser {
                     field: "local var name length",
                     value: 0,
                 })?;
-            let start_pc = self.read_u32(reader, layout, "local var startpc")?;
-            let end_pc = self.read_u32(reader, layout, "local var endpc")?;
+            let start_pc = read_sized_u32(reader, layout, "local var startpc")?;
+            let end_pc = read_sized_u32(reader, layout, "local var endpc")?;
             local_vars.push(RawLocalVar {
                 name,
                 start_pc,
@@ -377,7 +286,7 @@ impl Lua51Parser {
             });
         }
 
-        let upvalue_name_count = self.read_count(reader, layout, "upvalue name count")?;
+        let upvalue_name_count = read_sized_u32(reader, layout, "upvalue name count")?;
         let mut upvalue_names = Vec::with_capacity(upvalue_name_count as usize);
         for _ in 0..upvalue_name_count {
             if let Some(name) = self.parse_string(reader, layout)? {
@@ -401,22 +310,14 @@ impl Lua51Parser {
                 local_vars,
                 upvalue_names,
             },
-            extra: DialectDebugExtra::Lua51(Lua51DebugExtra),
+            extra: DialectDebugExtra::Lua51,
         })
-    }
-
-    fn parse_optional_string(
-        &self,
-        reader: &mut BinaryReader<'_>,
-        layout: &Lua51Layout,
-    ) -> Result<Option<RawString>, ParseError> {
-        self.parse_string(reader, layout)
     }
 
     fn parse_string(
         &self,
         reader: &mut BinaryReader<'_>,
-        layout: &Lua51Layout,
+        layout: &PucLuaChunkLayout,
     ) -> Result<Option<RawString>, ParseError> {
         let size = reader.read_u64_sized(layout.size_t_size, layout.endianness, "size_t")?;
         if size == 0 {
@@ -434,64 +335,79 @@ impl Lua51Parser {
             _ if self.options.mode.is_permissive() => payload,
             _ => return Err(ParseError::UnterminatedString { offset }),
         };
-        let text = self.decode_string_text(offset, &bytes)?;
-
-        Ok(Some(RawString {
+        Ok(Some(build_raw_string(
+            self.options,
+            offset,
             bytes,
-            text,
-            origin: Origin {
-                span: Span {
-                    offset,
-                    size: byte_count,
-                },
-                raw_word: None,
-            },
-        }))
+            byte_count,
+        )?))
+    }
+}
+
+struct Lua51InstructionCodec;
+
+impl PucLuaInstructionCodec for Lua51InstructionCodec {
+    type Opcode = Lua51Opcode;
+    type Fields = DecodedInstructionFields;
+    type ExtraWordPolicy = Lua51ExtraWordPolicy;
+    type Operands = Lua51Operands;
+
+    fn decode_fields(word: u32) -> Self::Fields {
+        decode_instruction_word(word)
     }
 
-    fn decode_string_text(
-        &self,
-        offset: usize,
-        bytes: &[u8],
-    ) -> Result<Option<DecodedText>, ParseError> {
-        let encoding = self.options.string_encoding;
-        let value = encoding.decode(offset, bytes, self.options.string_decode_mode)?;
-
-        Ok(Some(DecodedText { encoding, value }))
+    fn opcode_byte(fields: Self::Fields) -> u8 {
+        fields.opcode
     }
 
-    fn read_count(
-        &self,
-        reader: &mut BinaryReader<'_>,
-        layout: &Lua51Layout,
-        field: &'static str,
+    fn decode_operands(opcode: Self::Opcode, fields: Self::Fields) -> Self::Operands {
+        opcode.decode_operands(fields)
+    }
+
+    fn extra_word_policy(opcode: Self::Opcode) -> Self::ExtraWordPolicy {
+        opcode.extra_word_policy()
+    }
+
+    fn should_read_extra_word(policy: Self::ExtraWordPolicy, fields: Self::Fields) -> bool {
+        matches!(policy, Lua51ExtraWordPolicy::SetListWordIfCZero) && fields.c == 0
+    }
+
+    fn opcode_label(opcode: Self::Opcode) -> &'static str {
+        opcode.label()
+    }
+
+    fn extra_arg_opcode() -> Self::Opcode {
+        unreachable!("lua51 SETLIST helper word is raw data, not an EXTRAARG opcode")
+    }
+
+    fn extra_arg_ax(fields: Self::Fields) -> u32 {
+        fields.ax
+    }
+
+    fn read_extra_word(
+        words: &[RawInstructionWord],
+        pc: usize,
+        _opcode: Self::Opcode,
     ) -> Result<u32, ParseError> {
-        self.read_u32(reader, layout, field)
+        let Some(extra_word) = words.get(pc + 1).copied() else {
+            return Err(ParseError::MissingSetListWord { pc });
+        };
+        Ok(extra_word.word)
     }
 
-    fn read_u32(
-        &self,
-        reader: &mut BinaryReader<'_>,
-        layout: &Lua51Layout,
-        field: &'static str,
-    ) -> Result<u32, ParseError> {
-        let value = self.read_i64(reader, layout, field)?;
-        if value < 0 {
-            return Err(ParseError::NegativeValue { field, value });
-        }
+    fn wrap_opcode(opcode: Self::Opcode) -> RawInstrOpcode {
+        RawInstrOpcode::Lua51(opcode)
+    }
 
-        u32::try_from(value).map_err(|_| ParseError::IntegerOverflow {
-            field,
-            value: value as u64,
+    fn wrap_operands(operands: Self::Operands) -> RawInstrOperands {
+        RawInstrOperands::Lua51(operands)
+    }
+
+    fn wrap_extra(pc: u32, word_len: u8, setlist_extra_arg: Option<u32>) -> DialectInstrExtra {
+        DialectInstrExtra::Lua51(Lua51InstrExtra {
+            pc,
+            word_len,
+            setlist_extra_arg,
         })
-    }
-
-    fn read_i64(
-        &self,
-        reader: &mut BinaryReader<'_>,
-        layout: &Lua51Layout,
-        field: &'static str,
-    ) -> Result<i64, ParseError> {
-        reader.read_i64_sized(layout.integer_size, layout.endianness, field)
     }
 }

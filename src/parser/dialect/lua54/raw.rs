@@ -1,6 +1,6 @@
 //! 这个文件定义 Lua 5.4 专属的 raw 类型。
 
-use crate::parser::dialect::puc_lua::{DecodedInstructionFields54, define_puc_lua_opcodes};
+use crate::parser::family::puc_lua::{DecodedInstructionFields54, define_puc_lua_opcodes};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum Lua54OperandKind {
@@ -188,16 +188,10 @@ impl Lua54Opcode {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Lua54HeaderExtra;
-
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct Lua54ProtoExtra {
     pub raw_is_vararg: u8,
 }
-
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Lua54ConstPoolExtra;
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Lua54UpvalueExtra {

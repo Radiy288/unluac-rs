@@ -9,11 +9,12 @@ use crate::debug::{
     DebugColorMode, DebugDetail, DebugFilters, FocusPlan, colorize_debug_text,
     format_proto_summary_row,
 };
-use crate::parser::debug::{ParserProtoEntry, build_parser_summary_row};
-use crate::parser::{
-    ChunkHeader, DecodedText, Endianness, Origin, RawChunk, RawInstr, RawLiteralConst, RawProto,
-    RawString,
+use crate::parser::debug::{
+    ParserProtoEntry, build_parser_summary_row, format_endianness, format_literal,
+    format_optional_line, format_optional_raw_word, format_optional_source, format_optional_u32,
+    format_origin, format_raw_string,
 };
+use crate::parser::{ChunkHeader, RawChunk, RawInstr, RawProto};
 
 use super::raw::{Lua54DebugExtra, Lua54InstrExtra, Lua54Opcode, Lua54Operands, Lua54UpvalueExtra};
 
@@ -340,55 +341,6 @@ fn write_verbose_debug_info(output: &mut String, proto: &RawProto) {
         for (index, name) in debug_info.common.upvalue_names.iter().enumerate() {
             let _ = writeln!(output, "      u{index:<3} {}", format_raw_string(name));
         }
-    }
-}
-
-fn format_optional_source(source: Option<&RawString>) -> String {
-    source.map_or_else(|| "-".to_owned(), format_raw_string)
-}
-
-fn format_raw_string(raw: &RawString) -> String {
-    match raw.text.as_ref() {
-        Some(DecodedText { value, .. }) => format!("{value:?}"),
-        None => format!("<{} bytes>", raw.bytes.len()),
-    }
-}
-
-fn format_literal(literal: &RawLiteralConst) -> String {
-    match literal {
-        RawLiteralConst::Nil => "nil".to_owned(),
-        RawLiteralConst::Boolean(value) => format!("bool({value})"),
-        RawLiteralConst::Integer(value) => format!("int({value})"),
-        RawLiteralConst::Number(value) => format!("num({value})"),
-        RawLiteralConst::String(value) => format!("str({})", format_raw_string(value)),
-        RawLiteralConst::Int64(value) => format!("i64({value})"),
-        RawLiteralConst::UInt64(value) => format!("u64({value})"),
-        RawLiteralConst::Complex { real, imag } => format!("complex({real},{imag})"),
-    }
-}
-
-fn format_origin(origin: Origin) -> String {
-    let end = origin.span.offset + origin.span.size;
-    let raw = format_optional_raw_word(origin.raw_word);
-    format!("[{}..{} raw={}]", origin.span.offset, end, raw)
-}
-
-fn format_optional_raw_word(raw_word: Option<u64>) -> String {
-    raw_word.map_or_else(|| "-".to_owned(), |word| format!("0x{word:08x}"))
-}
-
-fn format_optional_u32(value: Option<u32>) -> String {
-    value.map_or_else(|| "-".to_owned(), |value| value.to_string())
-}
-
-fn format_optional_line(line: Option<&u32>) -> String {
-    line.map_or_else(|| "-".to_owned(), |line| line.to_string())
-}
-
-fn format_endianness(endianness: Endianness) -> &'static str {
-    match endianness {
-        Endianness::Little => "little",
-        Endianness::Big => "big",
     }
 }
 

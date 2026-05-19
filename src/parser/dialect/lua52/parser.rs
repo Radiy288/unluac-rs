@@ -5,15 +5,15 @@
 //! 模糊成“差不多一样”的弱抽象。
 
 use crate::decompile::DecompileDialect;
-use crate::parser::dialect::puc_lua::{
-    ClassicDebugDriver, LUA_SIGNATURE, LUA52_LUAC_TAIL, PucLuaLayout, PucLuaProtoSections,
-    build_raw_string, count_u8, decode_instruction_word, define_puc_lua_instruction_codec,
-    finish_puc_lua_proto, inherit_source, parse_child_protos, parse_classic_debug_sections,
+use crate::parser::error::ParseError;
+use crate::parser::family::puc_lua::{
+    ClassicDebugDriver, LUA_SIGNATURE, LUA52_LUAC_TAIL, PucLuaProtoSections, build_raw_string,
+    collect_counted, count_u8, decode_instruction_word, define_puc_lua_instruction_codec,
+    finish_puc_lua_proto, inherit_source, parse_classic_debug_sections,
     parse_puc_lua_instruction_section, parse_tagged_literal_pool, parse_upvalue_descriptors,
     read_proto_prelude, read_sized_i64, read_sized_u32, require_present,
     validate_instruction_word_size,
 };
-use crate::parser::error::ParseError;
 use crate::parser::options::ParseOptions;
 use crate::parser::raw::{
     ChunkHeader, ChunkLayout, Dialect, DialectConstPoolExtra, DialectDebugExtra,
@@ -24,10 +24,7 @@ use crate::parser::raw::{
 };
 use crate::parser::reader::BinaryReader;
 
-use super::raw::{
-    Lua52ConstPoolExtra, Lua52DebugExtra, Lua52ExtraWordPolicy, Lua52HeaderExtra, Lua52InstrExtra,
-    Lua52Opcode, Lua52ProtoExtra, Lua52UpvalueExtra,
-};
+use super::raw::{Lua52ExtraWordPolicy, Lua52InstrExtra, Lua52Opcode, Lua52ProtoExtra};
 
 const LUA52_VERSION: u8 = 0x52;
 const LUA52_FORMAT: u8 = 0;
@@ -43,7 +40,7 @@ pub(crate) struct Lua52Parser {
 
 struct Lua52ClassicDebugDriver<'a> {
     parser: &'a Lua52Parser,
-    layout: &'a PucLuaLayout,
+    layout: &'a PucLuaChunkLayout,
 }
 
 impl<'a, 'bytes> ClassicDebugDriver<'bytes> for Lua52ClassicDebugDriver<'a> {
@@ -51,7 +48,7 @@ impl<'a, 'bytes> ClassicDebugDriver<'bytes> for Lua52ClassicDebugDriver<'a> {
         &mut self,
         reader: &mut BinaryReader<'bytes>,
     ) -> Result<Option<RawString>, ParseError> {
-        self.parser.parse_optional_string(reader, self.layout)
+        self.parser.parse_string(reader, self.layout)
     }
 
     fn read_count(
@@ -59,7 +56,7 @@ impl<'a, 'bytes> ClassicDebugDriver<'bytes> for Lua52ClassicDebugDriver<'a> {
         reader: &mut BinaryReader<'bytes>,
         field: &'static str,
     ) -> Result<u32, ParseError> {
-        self.parser.read_count(reader, self.layout, field)
+        read_sized_u32(reader, self.layout, field)
     }
 
     fn read_line(&mut self, reader: &mut BinaryReader<'bytes>) -> Result<u32, ParseError> {
@@ -100,19 +97,10 @@ impl Lua52Parser {
     pub(crate) fn parse(&self, bytes: &[u8]) -> Result<RawChunk, ParseError> {
         let mut reader = BinaryReader::new(bytes);
         let header = self.parse_header(&mut reader)?;
-        let header_layout = header
+        let layout = header
             .puc_lua_layout()
             .expect("lua52 parser must produce a PUC-Lua header layout");
-        let layout = PucLuaLayout {
-            endianness: header_layout.endianness,
-            integer_size: header_layout.integer_size,
-            lua_integer_size: None,
-            size_t_size: header_layout.size_t_size,
-            instruction_size: header_layout.instruction_size,
-            number_size: header_layout.number_size,
-            integral_number: header_layout.integral_number,
-        };
-        let main = self.parse_proto(&mut reader, &layout)?;
+        let main = self.parse_proto(&mut reader, layout)?;
 
         Ok(RawChunk {
             header,
@@ -185,7 +173,7 @@ impl Lua52Parser {
                 number_size,
                 integral_number,
             }),
-            extra: DialectHeaderExtra::Lua52(Lua52HeaderExtra),
+            extra: DialectHeaderExtra::Lua52,
             origin: Origin {
                 span: Span {
                     offset: start,
@@ -199,7 +187,7 @@ impl Lua52Parser {
     fn parse_proto(
         &self,
         reader: &mut BinaryReader<'_>,
-        layout: &PucLuaLayout,
+        layout: &PucLuaChunkLayout,
     ) -> Result<RawProto, ParseError> {
         let (prelude, header_source) = read_proto_prelude(
             reader,
@@ -212,7 +200,7 @@ impl Lua52Parser {
             parse_puc_lua_instruction_section::<Lua52InstructionCodec, _, _>(
                 reader,
                 layout,
-                |reader, field| self.read_count(reader, layout, field),
+                |reader, field| read_sized_u32(reader, layout, field),
                 |_, _| Ok(()),
                 "instruction_size",
             )?;
@@ -245,11 +233,11 @@ impl Lua52Parser {
     fn parse_constants(
         &self,
         reader: &mut BinaryReader<'_>,
-        layout: &PucLuaLayout,
+        layout: &PucLuaChunkLayout,
     ) -> Result<(RawConstPool, Vec<RawProto>), ParseError> {
         let literals = parse_tagged_literal_pool(
             reader,
-            |reader, field| self.read_count(reader, layout, field),
+            |reader, field| read_sized_u32(reader, layout, field),
             |tag, offset, reader| {
                 Ok(match tag {
                     LUA_TNIL => RawLiteralConst::Nil,
@@ -275,13 +263,13 @@ impl Lua52Parser {
             },
         )?;
 
-        let child_count = self.read_count(reader, layout, "child proto count")?;
-        let children = parse_child_protos(child_count, || self.parse_proto(reader, layout))?;
+        let child_count = read_sized_u32(reader, layout, "child proto count")?;
+        let children = collect_counted(child_count, || self.parse_proto(reader, layout))?;
 
         Ok((
             RawConstPool {
                 common: RawConstPoolCommon { literals },
-                extra: DialectConstPoolExtra::Lua52(Lua52ConstPoolExtra),
+                extra: DialectConstPoolExtra::Lua52,
             },
             children,
         ))
@@ -290,9 +278,9 @@ impl Lua52Parser {
     fn parse_upvalues(
         &self,
         reader: &mut BinaryReader<'_>,
-        layout: &PucLuaLayout,
+        layout: &PucLuaChunkLayout,
     ) -> Result<RawUpvalueInfo, ParseError> {
-        let count = self.read_count(reader, layout, "upvalue count")?;
+        let count = read_sized_u32(reader, layout, "upvalue count")?;
         let count_u8 = count_u8(count, "upvalue count")?;
         let descriptors = parse_upvalue_descriptors(reader, count)?;
 
@@ -301,14 +289,14 @@ impl Lua52Parser {
                 count: count_u8,
                 descriptors,
             },
-            extra: DialectUpvalueExtra::Lua52(Lua52UpvalueExtra),
+            extra: DialectUpvalueExtra::Lua52,
         })
     }
 
     fn parse_debug_info(
         &self,
         reader: &mut BinaryReader<'_>,
-        layout: &PucLuaLayout,
+        layout: &PucLuaChunkLayout,
         raw_instruction_words: usize,
     ) -> Result<(Option<RawString>, RawDebugInfo), ParseError> {
         let mut driver = Lua52ClassicDebugDriver {
@@ -326,23 +314,15 @@ impl Lua52Parser {
             sections.source,
             RawDebugInfo {
                 common: sections.common,
-                extra: DialectDebugExtra::Lua52(Lua52DebugExtra),
+                extra: DialectDebugExtra::Lua52,
             },
         ))
-    }
-
-    fn parse_optional_string(
-        &self,
-        reader: &mut BinaryReader<'_>,
-        layout: &PucLuaLayout,
-    ) -> Result<Option<RawString>, ParseError> {
-        self.parse_string(reader, layout)
     }
 
     fn parse_string(
         &self,
         reader: &mut BinaryReader<'_>,
-        layout: &PucLuaLayout,
+        layout: &PucLuaChunkLayout,
     ) -> Result<Option<RawString>, ParseError> {
         let size = reader.read_u64_sized(layout.size_t_size, layout.endianness, "size_t")?;
         if size == 0 {
@@ -367,21 +347,12 @@ impl Lua52Parser {
             byte_count,
         )?))
     }
-
-    fn read_count(
-        &self,
-        reader: &mut BinaryReader<'_>,
-        layout: &PucLuaLayout,
-        field: &'static str,
-    ) -> Result<u32, ParseError> {
-        read_sized_u32(reader, layout, field)
-    }
 }
 
 define_puc_lua_instruction_codec!(
     codec: Lua52InstructionCodec,
     opcode: Lua52Opcode,
-    fields: crate::parser::dialect::puc_lua::DecodedInstructionFields,
+    fields: crate::parser::family::puc_lua::DecodedInstructionFields,
     extra_word_policy: Lua52ExtraWordPolicy,
     operands: super::raw::Lua52Operands,
     decode_fields: decode_instruction_word,

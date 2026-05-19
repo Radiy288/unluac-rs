@@ -3,7 +3,7 @@
 //! Lua 5.3 基本延续了 5.2 的指令编码外形，但增加了整数除法和整套位运算 opcode，
 //! 同时 header/常量池语义也出现了版本差异；这些类型需要保持独立。
 
-use crate::parser::dialect::puc_lua::{DecodedInstructionFields, define_puc_lua_opcodes};
+use crate::parser::family::puc_lua::{DecodedInstructionFields, define_puc_lua_opcodes};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum Lua53OperandKind {
@@ -120,27 +120,11 @@ impl Lua53Opcode {
     }
 }
 
-/// Lua 5.3 header 的专属信息目前都已体现在共享字段里，这里保留扩展槽位。
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Lua53HeaderExtra;
-
 /// Lua 5.3 仍保留原始 vararg 位图，避免更后层丢掉版本特异信息。
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct Lua53ProtoExtra {
     pub raw_is_vararg: u8,
 }
-
-/// Lua 5.3 常量池的版本差异已落在共享字面量标签上，这里保留扩展槽位。
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Lua53ConstPoolExtra;
-
-/// Lua 5.3 upvalue 描述符已经落进共享层，这里保留扩展槽位。
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Lua53UpvalueExtra;
-
-/// Lua 5.3 调试信息目前完全落在共享结构里，但保留扩展槽位。
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Lua53DebugExtra;
 
 /// Lua 5.3 指令额外保存 raw pc 以及 `LOADKX/SETLIST` 绑定的 `EXTRAARG`。
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]

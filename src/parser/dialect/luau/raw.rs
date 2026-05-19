@@ -236,9 +236,6 @@ pub struct LuauConstPoolExtra {
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct LuauUpvalueExtra;
-
-#[derive(Debug, Clone, Default, PartialEq)]
 pub struct LuauDebugExtra {
     pub line_gap_log2: Option<u8>,
     pub local_regs: Vec<u8>,

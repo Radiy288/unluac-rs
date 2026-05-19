@@ -8,7 +8,7 @@ use crate::decompile::DecompileDialect;
 use crate::parser::error::ParseError;
 use crate::parser::options::ParseOptions;
 use crate::parser::raw::{
-    ChunkHeader, ChunkLayout, DecodedText, Dialect, DialectConstPoolExtra, DialectDebugExtra,
+    ChunkHeader, ChunkLayout, Dialect, DialectConstPoolExtra, DialectDebugExtra,
     DialectHeaderExtra, DialectInstrExtra, DialectProtoExtra, DialectUpvalueExtra, LuauChunkLayout,
     Origin, ProtoFrameInfo, ProtoLineRange, ProtoSignature, RawChunk, RawConstPool,
     RawConstPoolCommon, RawDebugInfo, RawDebugInfoCommon, RawInstr, RawInstrOpcode,
@@ -16,10 +16,11 @@ use crate::parser::raw::{
     RawUpvalueInfo, RawUpvalueInfoCommon, Span,
 };
 use crate::parser::reader::BinaryReader;
+use crate::parser::strings::build_raw_string;
 
 use super::raw::{
     LuauConstEntry, LuauConstPoolExtra, LuauDebugExtra, LuauHeaderExtra, LuauInstrExtra,
-    LuauOpcode, LuauProtoExtra, LuauTableConstEntry, LuauUpvalueExtra,
+    LuauOpcode, LuauProtoExtra, LuauTableConstEntry,
 };
 
 const LUAU_ERROR_BLOB_VERSION: u8 = 0;
@@ -87,7 +88,7 @@ impl LuauParserState {
             userdata_type_names,
         });
 
-        let layout = *header
+        let layout = header
             .luau_layout()
             .expect("luau parser must produce a luau chunk layout");
         let mut flat_protos = self
@@ -175,18 +176,12 @@ impl LuauParserState {
                     value: u64::MAX,
                 })?;
             let bytes = reader.read_exact(length)?.to_vec();
-            let text = self.decode_string_text(offset, &bytes)?;
-            strings.push(RawString {
+            strings.push(build_raw_string(
+                self.options,
+                offset,
                 bytes,
-                text,
-                origin: Origin {
-                    span: Span {
-                        offset,
-                        size: reader.offset() - offset,
-                    },
-                    raw_word: None,
-                },
-            });
+                reader.offset() - offset,
+            )?);
         }
 
         Ok(strings)
@@ -225,7 +220,7 @@ impl LuauParserState {
     fn parse_proto_table(
         &mut self,
         reader: &mut BinaryReader<'_>,
-        layout: LuauChunkLayout,
+        layout: &LuauChunkLayout,
     ) -> Result<Vec<FlatProto>, ParseError> {
         let proto_count = usize::try_from(reader.read_varint_u32_luau("luau proto count")?)
             .map_err(|_| ParseError::IntegerOverflow {
@@ -244,7 +239,7 @@ impl LuauParserState {
     fn parse_flat_proto(
         &mut self,
         reader: &mut BinaryReader<'_>,
-        layout: LuauChunkLayout,
+        layout: &LuauChunkLayout,
     ) -> Result<FlatProto, ParseError> {
         let start = reader.offset();
         let max_stack_size = reader.read_u8()?;
@@ -303,7 +298,7 @@ impl LuauParserState {
                             count: upvalue_count,
                             descriptors: Vec::new(),
                         },
-                        extra: DialectUpvalueExtra::Luau(LuauUpvalueExtra),
+                        extra: DialectUpvalueExtra::Luau,
                     },
                     debug_info,
                     children: Vec::new(),
@@ -716,16 +711,6 @@ impl LuauParserState {
                 value: id as u64,
             })
             .map(Some)
-    }
-
-    fn decode_string_text(
-        &self,
-        offset: usize,
-        bytes: &[u8],
-    ) -> Result<Option<DecodedText>, ParseError> {
-        let encoding = self.options.string_encoding;
-        let value = encoding.decode(offset, bytes, self.options.string_decode_mode)?;
-        Ok(Some(DecodedText { encoding, value }))
     }
 }
 

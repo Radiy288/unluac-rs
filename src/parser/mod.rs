@@ -7,9 +7,11 @@
 mod debug;
 mod dialect;
 mod error;
+mod family;
 mod options;
 mod raw;
 mod reader;
+pub(crate) mod strings;
 
 pub use debug::dump_parser;
 pub use dialect::lua51::*;
