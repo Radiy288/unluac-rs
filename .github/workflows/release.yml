@@ -4,7 +4,12 @@ on:
   push:
     tags:
       - "v*.*.*"
-
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (optional, will use package version if empty)'
+        required: false
+        type: string
 permissions:
   contents: read
 
