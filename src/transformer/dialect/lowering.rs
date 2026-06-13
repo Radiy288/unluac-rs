@@ -396,12 +396,6 @@ where
     match target {
         TargetPlaceholder::Low(index) => Ok(InstrRef(index)),
         TargetPlaceholder::Raw(raw_index) => {
-            let Some(low_index) = raw_target_low[raw_index] else {
-                return Err(TransformError::UntargetableRawInstruction {
-                    raw_pc: owner_pc,
-                    target_raw: raw_index_to_target_raw(raw_index),
-                });
-            };
             Ok(InstrRef(low_index))
         }
     }
